@@ -1,0 +1,6 @@
+pandas
+numpy
+numba
+TA-Lib
+vectorbt==0.27.3
+tqdm
