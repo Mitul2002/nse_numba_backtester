@@ -8,6 +8,7 @@ import numpy as np
 import time
 import os
 import talib
+from joblib import Parallel, delayed
 from tqdm import tqdm
 from numba import njit, float64, int64
 from numba.typed import List as NumbaList
@@ -26,6 +27,15 @@ RR_RATIO_FOR_TP = 3.0
 
 DATA_FOLDER = os.environ.get("BT_DATA_FOLDER", "data_sample/")
 OUTPUT_CSV_FILENAME = "results/numba_engine_report.csv"
+# 1 = current, default, sequential behavior. >1 spawns that many worker processes via
+# joblib (loky backend). Empirically (see WALKTHROUGH.md), the sweet spot on this
+# machine was ~6-8 workers -- both fewer and many more were slower, because each symbol
+# is only ~8ms of actual work and past a handful of processes, spawn/IPC overhead
+# outweighs the gain. Also benchmarked stdlib ProcessPoolExecutor (slower, ~9.5s at its
+# own best of 4 workers) and dask's processes scheduler (~10% faster than joblib at
+# 6.2s, but not worth the much heavier dependency for this embarrassingly-parallel
+# workload). Benchmark on your own hardware before assuming a specific number transfers.
+BT_WORKERS = int(os.environ.get("BT_WORKERS", "1"))
 
 METRIC_NAMES = [
     "Start", "End", "Period", "Start Value", "End Value", "Total Return [%]",
@@ -71,6 +81,7 @@ def custom_backtest_numba_loop_atr(
         current_high = high_prices[i]
         current_low = low_prices[i]
         exit_reason_code = 0
+        just_exited = False
 
         if in_position:
             exit_price_triggered = float64(0.0)
@@ -100,9 +111,14 @@ def custom_backtest_numba_loop_atr(
                 ))
                 in_position = False
                 current_shares = float64(0.0)
+                just_exited = True
 
-        # Entry: signal from previous bar (i-1), entry at open of current bar (i)
-        if not in_position and i > 0 and entry_signals[i-1] and cash > 1.0:
+        # Entry: signal from previous bar (i-1), entry at open of current bar (i).
+        # `not just_exited` matches vectorbt's from_signals behavior in this
+        # configuration, which does not register a new entry on the same bar as a
+        # stop exit -- without this, the two engines disagree by exactly one trade
+        # on any symbol where a fresh signal happens to land on an exit bar.
+        if not in_position and not just_exited and i > 0 and entry_signals[i-1] and cash > 1.0:
             entry_price_for_sl_tp_calc = current_open * (1.0 + slippage_pct)
 
             if entry_price_for_sl_tp_calc > 1e-9:
@@ -136,7 +152,15 @@ def custom_backtest_numba_loop_atr(
 
         equity[i] = cash + current_shares * close_prices[i] if in_position else cash
 
-    return equity, trades, total_fees_paid_accumulator
+    # A position still open when the data ends never gets appended to `trades` (that
+    # only happens on an SL/TP exit), so without this it silently vanishes from every
+    # trade-count metric -- vectorbt's Total Trades includes still-open positions,
+    # marked-to-market at the last close.
+    open_shares = current_shares if in_position else float64(0.0)
+    open_entry_price = entry_price_avg_cost_per_share if in_position else float64(0.0)
+    open_entry_idx = current_trade_entry_idx if in_position else int64(-1)
+
+    return equity, trades, total_fees_paid_accumulator, open_shares, open_entry_price, open_entry_idx
 
 
 def format_timedelta_custom(td_obj_or_days_val):
@@ -164,7 +188,8 @@ def format_timedelta_custom(td_obj_or_days_val):
     return f"{days} days {hours:02d}:{minutes:02d}:{secs:02d}"
 
 
-def calculate_custom_metrics(price_df_indexed, equity_curve, trades_raw, initial_cash, total_fees_paid_from_loop):
+def calculate_custom_metrics(price_df_indexed, equity_curve, trades_raw, initial_cash, total_fees_paid_from_loop,
+                              open_shares=0.0, open_entry_price=0.0):
     metrics = {col: np.nan for col in METRIC_NAMES}
     dates = price_df_indexed.index
     if not dates.empty:
@@ -210,10 +235,15 @@ def calculate_custom_metrics(price_df_indexed, equity_curve, trades_raw, initial
             except Exception:
                 metrics['Max Drawdown Duration'] = format_timedelta_custom(pd.Timedelta(seconds=0))
     num_trades = len(trades_raw) if trades_raw else 0
-    metrics['Total Trades'] = num_trades
+    has_open_position = open_shares > 1e-9
+    metrics['Total Trades'] = num_trades + (1 if has_open_position else 0)
     metrics['Total Closed Trades'] = num_trades
-    metrics['Total Open Trades'] = 0
-    metrics['Open Trade PnL'] = 0.0
+    metrics['Total Open Trades'] = 1 if has_open_position else 0
+    if has_open_position and not price_df_indexed['Close'].empty:
+        last_close = float(price_df_indexed['Close'].iloc[-1])
+        metrics['Open Trade PnL'] = open_shares * (last_close - open_entry_price)
+    else:
+        metrics['Open Trade PnL'] = 0.0
     if num_trades > 0:
         pnls = np.array([t[5] for t in trades_raw], dtype=np.float64)
         returns_pct_trade = np.array([t[6] for t in trades_raw], dtype=np.float64)
@@ -275,9 +305,11 @@ def run_strategy_for_symbol_custom(file_path, symbol_name):
 
     try:
         load_start_time = time.perf_counter()
+        header_cols = pd.read_csv(file_path, nrows=0).columns
+        date_col = 'date' if 'date' in header_cols else 'datetime'
         price_df = pd.read_csv(
-            file_path, index_col='date', parse_dates=True,
-            usecols=['date', 'open', 'high', 'low', 'close', 'volume']
+            file_path, index_col=date_col, parse_dates=True,
+            usecols=[date_col, 'open', 'high', 'low', 'close', 'volume']
         )
         price_df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
         price_df.sort_index(inplace=True)
@@ -327,7 +359,7 @@ def run_strategy_for_symbol_custom(file_path, symbol_name):
         symbol_results['signal_gen_time_s'] = signal_end_time - signal_start_time
 
         portfolio_start_time = time.perf_counter()
-        equity_curve, trades_raw, total_fees_loop = custom_backtest_numba_loop_atr(
+        equity_curve, trades_raw, total_fees_loop, open_shares, open_entry_price, _open_entry_idx = custom_backtest_numba_loop_atr(
             open_np, high_np, low_np, close_np,
             atr_np_talib,
             final_entry_signals_np,
@@ -338,7 +370,8 @@ def run_strategy_for_symbol_custom(file_path, symbol_name):
         portfolio_end_time = time.perf_counter()
         symbol_results['portfolio_sim_time_s'] = portfolio_end_time - portfolio_start_time
 
-        calculated_metrics = calculate_custom_metrics(price_df, equity_curve, trades_raw, INIT_CASH, total_fees_loop)
+        calculated_metrics = calculate_custom_metrics(price_df, equity_curve, trades_raw, INIT_CASH, total_fees_loop,
+                                                        open_shares, open_entry_price)
         for key_metric_name in METRIC_NAMES:
             symbol_results[key_metric_name] = calculated_metrics.get(key_metric_name, np.nan)
 
@@ -366,15 +399,28 @@ if __name__ == '__main__':
     if not csv_files:
         print(f"No CSV files found in '{DATA_FOLDER}'.")
         exit()
-    print(f"Found {len(csv_files)} CSV files. Processing with Numba engine (ATR SL/TP)...\n")
     os.makedirs(os.path.dirname(OUTPUT_CSV_FILENAME), exist_ok=True)
-    for csv_file in tqdm(csv_files, desc="Processing (Numba, ATR SL/TP)"):
-        symbol_name = os.path.splitext(csv_file)[0]
-        file_path = os.path.join(DATA_FOLDER, csv_file)
-        result = run_strategy_for_symbol_custom(file_path, symbol_name)
-        all_symbol_results.append(result)
-        if result['status'] != 'Success':
-            tqdm.write(f"Symbol {symbol_name}: {result['status']} (Time: {result.get('total_symbol_time_s', 0):.2f}s)")
+
+    if BT_WORKERS > 1:
+        print(f"Found {len(csv_files)} CSV files. Processing with Numba engine across {BT_WORKERS} worker processes (joblib/loky)...\n")
+        file_paths = [os.path.join(DATA_FOLDER, f) for f in csv_files]
+        symbol_names = [os.path.splitext(f)[0] for f in csv_files]
+        all_symbol_results = Parallel(n_jobs=BT_WORKERS, backend='loky', verbose=5)(
+            delayed(run_strategy_for_symbol_custom)(fp, sn)
+            for fp, sn in zip(file_paths, symbol_names)
+        )
+        for result in all_symbol_results:
+            if result['status'] != 'Success':
+                print(f"Symbol {result['symbol']}: {result['status']} (Time: {result.get('total_symbol_time_s', 0):.2f}s)")
+    else:
+        print(f"Found {len(csv_files)} CSV files. Processing with Numba engine (single process, ATR SL/TP)...\n")
+        for csv_file in tqdm(csv_files, desc="Processing (Numba, ATR SL/TP)"):
+            symbol_name = os.path.splitext(csv_file)[0]
+            file_path = os.path.join(DATA_FOLDER, csv_file)
+            result = run_strategy_for_symbol_custom(file_path, symbol_name)
+            all_symbol_results.append(result)
+            if result['status'] != 'Success':
+                tqdm.write(f"Symbol {symbol_name}: {result['status']} (Time: {result.get('total_symbol_time_s', 0):.2f}s)")
     main_end_time = time.perf_counter()
     print(f"\n\nFinished processing {len(csv_files)} symbols in {main_end_time - main_start_time:.2f} seconds.")
     results_df = pd.DataFrame(all_symbol_results, columns=CSV_COLUMNS)

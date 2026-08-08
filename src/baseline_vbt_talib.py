@@ -61,9 +61,11 @@ def run_strategy_for_symbol_vbt_talib(file_path, symbol_name):
 
     try:
         load_start_time = time.perf_counter()
+        header_cols = pd.read_csv(file_path, nrows=0).columns
+        date_col = 'date' if 'date' in header_cols else 'datetime'
         price_df = pd.read_csv(
-            file_path, index_col='date', parse_dates=True,
-            usecols=['date', 'open', 'high', 'low', 'close', 'volume']
+            file_path, index_col=date_col, parse_dates=True,
+            usecols=[date_col, 'open', 'high', 'low', 'close', 'volume']
         )
         price_df.columns = ['Open', 'High', 'Low', 'Close', 'Volume']
         price_df.sort_index(inplace=True)
@@ -93,13 +95,21 @@ def run_strategy_for_symbol_vbt_talib(file_path, symbol_name):
         signal_start_time = time.perf_counter()
         rsi_crossed_above_40 = (rsi > 40) & (rsi.shift(1) <= 40)
         trend_filter = ema_short > ema_long
-        base_entry_signals = rsi_crossed_above_40 & trend_filter
+        # Signal known as of this bar's close (bar X) -- not yet actionable at X's own close.
+        base_entry_signals_at_signal_bar = rsi_crossed_above_40 & trend_filter
 
+        # atr.shift(1), once entries below are also shifted to the action bar (X+1),
+        # lines up to "ATR as of the signal bar (X)" -- same reference the numba engine
+        # uses via atr_values[i-1]. Left un-shifted, this line was previously paired with
+        # un-shifted entries, silently pulling ATR from X-1 instead of X.
         atr_on_signal_bar = atr.shift(1)
         valid_atr_mask = atr_on_signal_bar.notna() & (atr_on_signal_bar > 1e-9)
 
-        final_entry_signals = base_entry_signals & valid_atr_mask
-        final_entry_signals = final_entry_signals.fillna(False)
+        # Shift the combined signal forward one bar: the action bar is X+1, matching the
+        # numba engine's `entry_signals[i-1]` -> fill at open of bar i convention. Without
+        # this shift (and an explicit price=open below), vectorbt defaults to filling at
+        # the CLOSE of the same bar that generated the signal -- a look-ahead bug.
+        final_entry_signals = (base_entry_signals_at_signal_bar & valid_atr_mask).shift(1).fillna(False).astype(bool)
         signal_end_time = time.perf_counter()
         symbol_results['signal_gen_time_s'] = signal_end_time - signal_start_time
 
@@ -117,8 +127,16 @@ def run_strategy_for_symbol_vbt_talib(file_path, symbol_name):
         pf = vbt.Portfolio.from_signals(
             close=close_prices, open=open_prices, high=high_prices, low=low_prices,
             entries=final_entry_signals,
+            price=open_prices,  # fill at the action bar's open, matching the numba engine
             sl_stop=sl_stop_pct_series,
             tp_stop=tp_stop_pct_series,
+            # Without this, vectorbt anchors the SL/TP % distance to its internal
+            # valuation price rather than the actual fill price, silently computing
+            # stop levels from the wrong base price and letting trades run far past
+            # where they should have exited. This was the dominant source of mismatch
+            # against the numba engine (which always anchors to entry_price_for_sl_tp_calc,
+            # the actual fill price) -- not float rounding.
+            stop_entry_price='fillprice',
             init_cash=INIT_CASH, fees=FEES, slippage=SLIPPAGE, freq='D'
         )
         stats = pf.stats()

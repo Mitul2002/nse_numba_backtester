@@ -1,0 +1,104 @@
+20 strategies x 2050 symbols
+
+[Basic: EMA trend + RSI]
+  strategy: ema(close, 50) > ema(close, 200) AND rsi(close, 14) > 40
+  success=2045 error=0 skipped=5  total_trades=110192  avg_return=229.11%  time=33.3s
+
+[Basic: SMA + MACD]
+  strategy: sma(close, 20) > sma(close, 50) AND macd(close, 12, 26, 9) > 0
+  success=2045 error=0 skipped=5  total_trades=137360  avg_return=403.70%  time=16.6s
+
+[Crossover: RSI + ADX]
+  strategy: rsi(close, 14) crossover 50 AND adx(high, low, close, 14) > 20
+  success=2045 error=0 skipped=5  total_trades=83389  avg_return=185.22%  time=16.1s
+
+[Volume-based: MFI + Williams%R]
+  strategy: mfi(high, low, close, volume, 14) > 70 AND willr(high, low, close, 14) < -50
+  success=2045 error=0 skipped=5  total_trades=74922  avg_return=273.11%  time=23.0s
+
+[Stochastic]
+  strategy: stoch(high, low, close, 14) > 80 AND rsi(close, 14) > 60
+  success=2045 error=0 skipped=5  total_trades=105914  avg_return=196.86%  time=29.0s
+
+[StochRSI crossover]
+  strategy: stochrsi(close, 14) crossover 50 AND ema(close, 20) > ema(close, 50)
+  success=2045 error=0 skipped=5  total_trades=102694  avg_return=406.87%  time=29.8s
+
+[NATR + MACD crossover]
+  strategy: natr(high, low, close, 14) > 2 AND macd(close, 12, 26, 9) crossover 0
+  success=2045 error=0 skipped=5  total_trades=77493  avg_return=119.08%  time=29.2s
+
+[Bollinger Bands (dot-property)]
+  strategy: bbands(close, 20, 2).upper < close AND rsi(close, 14) > 70
+  success=2045 error=0 skipped=5  total_trades=73065  avg_return=70.68%  time=27.2s
+
+[CMO + Ultimate Oscillator]
+  strategy: cmo(close, 14) > 40 AND ultosc(high, low, close, 7, 14, 28) > 50
+  success=2045 error=0 skipped=5  total_trades=76717  avg_return=99.08%  time=27.5s
+
+[DI crossover + ADX]
+  strategy: plus_di(high, low, close, 14) crossover minus_di(high, low, close, 14) AND adx(high, low, close, 14) > 25
+  success=2045 error=0 skipped=5  total_trades=37630  avg_return=46.54%  time=20.2s
+
+[Multi-timeframe: RSI daily+weekly]
+  strategy: tf(rsi(close, 14) > 70, 'daily') AND tf(rsi(close, 14) < 30, 'weekly')
+  success=2045 error=0 skipped=5  total_trades=113  avg_return=-0.23%  time=16.9s
+
+[Multi-timeframe: EMA+MACD d/w]
+  strategy: tf(ema(close, 50) > ema(close, 200), 'daily') AND tf(macd(close, 12, 26, 9) > 0, 'weekly')
+  success=2045 error=0 skipped=5  total_trades=102361  avg_return=356.52%  time=19.3s
+
+[Aggregation: count()]
+  strategy: count(rsi(close, 14) > 70, 10) >= 5 AND ema(close, 50) > ema(close, 200)
+  success=2045 error=0 skipped=5  total_trades=37219  avg_return=59.66%  time=15.7s
+
+[Aggregation: countstreak()]
+  strategy: countstreak(ema(close, 21) > ema(close, 55), 8) >= 1 AND rsi(close, 14) > 50
+  success=2045 error=0 skipped=5  total_trades=126792  avg_return=372.10%  time=21.7s
+
+[Lag: n_days_ago]
+  strategy: ema(close, 21) > n_days_ago(ema(close, 21), 5) AND rsi(close, 14) > 50
+  success=2045 error=0 skipped=5  total_trades=158724  avg_return=406.18%  time=16.8s
+
+[Lag: n_weeks_ago]
+  strategy: n_weeks_ago(ema(close, 34), 4) < ema(close, 34) AND mfi(high, low, close, volume, 14) > 60
+  success=2045 error=0 skipped=5  total_trades=123751  avg_return=362.14%  time=16.8s
+
+[Nested: stddev of stddev]
+  strategy: stddev(close, 20) > sma(stddev(close, 20), 10) AND ema(close, 50) > ema(close, 200)
+  success=2045 error=0 skipped=5  total_trades=108569  avg_return=263.72%  time=16.6s
+
+[Nested: abs(macd) vs sma(abs)]
+  strategy: abs(macd(close, 12, 26, 9)) > sma(abs(macd(close, 12, 26, 9)), 10) AND stoch(high, low, close, 14) > 80
+  success=2045 error=0 skipped=5  total_trades=98447  avg_return=222.71%  time=16.8s
+
+[Golden cross (EMA crossover)]
+  strategy: ema(close, 50) crossover ema(close, 200) AND rsi(close, 14) > 40
+  success=2045 error=0 skipped=5  total_trades=15324  avg_return=18.62%  time=15.0s
+
+[PPO crossover]
+  strategy: ppo(close, 12, 26) crossover 0 AND stoch(high, low, close, 14) > 70
+  success=2045 error=0 skipped=5  total_trades=59348  avg_return=92.29%  time=16.0s
+
+====================================================================================================
+Strategy                               Success  Error  Skip    Trades   AvgRet%  Time(s)
+Basic: EMA trend + RSI                    2045      0     5    110192    229.11     33.3
+Basic: SMA + MACD                         2045      0     5    137360    403.70     16.6
+Crossover: RSI + ADX                      2045      0     5     83389    185.22     16.1
+Volume-based: MFI + Williams%R            2045      0     5     74922    273.11     23.0
+Stochastic                                2045      0     5    105914    196.86     29.0
+StochRSI crossover                        2045      0     5    102694    406.87     29.8
+NATR + MACD crossover                     2045      0     5     77493    119.08     29.2
+Bollinger Bands (dot-property)            2045      0     5     73065     70.68     27.2
+CMO + Ultimate Oscillator                 2045      0     5     76717     99.08     27.5
+DI crossover + ADX                        2045      0     5     37630     46.54     20.2
+Multi-timeframe: RSI daily+weekly         2045      0     5       113     -0.23     16.9
+Multi-timeframe: EMA+MACD d/w             2045      0     5    102361    356.52     19.3
+Aggregation: count()                      2045      0     5     37219     59.66     15.7
+Aggregation: countstreak()                2045      0     5    126792    372.10     21.7
+Lag: n_days_ago                           2045      0     5    158724    406.18     16.8
+Lag: n_weeks_ago                          2045      0     5    123751    362.14     16.8
+Nested: stddev of stddev                  2045      0     5    108569    263.72     16.6
+Nested: abs(macd) vs sma(abs)             2045      0     5     98447    222.71     16.8
+Golden cross (EMA crossover)              2045      0     5     15324     18.62     15.0
+PPO crossover                             2045      0     5     59348     92.29     16.0

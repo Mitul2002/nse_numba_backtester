@@ -50,7 +50,7 @@ if "Avg Winning Trade Duration" in df1.columns:
 all_needed_cols = ["symbol"] + COLS_TO_COMPARE
 cols_to_compare_final = COLS_TO_COMPARE.copy()
 for current_df, name in [(df1, "baseline (modified)"), (df2, "numba engine")]:
-    missing = [c for c in all_needed_cols if c not in current_df.columns]
+    missing = [c for c in all_needed_cols if c not in current_df.columns] 
     if missing:
         print(f"WARNING: Missing columns in {name}: {missing}")
         for m_col in missing:
